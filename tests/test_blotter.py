@@ -60,7 +60,7 @@ class BlotterTestCase(WithCreateBarData,
         cls.future_cl = cls.asset_finder.retrieve_asset(1000)
 
     @classmethod
-    def make_equity_daily_bar_data(cls):
+    def make_equity_daily_bar_data(cls, country_code, sids):
         yield 24, pd.DataFrame(
             {
                 'open': [50, 50],
@@ -93,7 +93,7 @@ class BlotterTestCase(WithCreateBarData,
                     'end_date': cls.END_DATE,
                     'expiration_date': cls.END_DATE,
                     'auto_close_date': cls.END_DATE,
-                    'exchange': 'CME',
+                    'exchange': 'CMES',
                 },
             },
             orient='index',

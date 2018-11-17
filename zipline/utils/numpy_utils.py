@@ -32,6 +32,8 @@ numpy_version = StrictVersion(np.__version__)
 uint8_dtype = dtype('uint8')
 bool_dtype = dtype('bool')
 
+uint32_dtype = dtype('uint32')
+uint64_dtype = dtype('uint64')
 int64_dtype = dtype('int64')
 
 float32_dtype = dtype('float32')

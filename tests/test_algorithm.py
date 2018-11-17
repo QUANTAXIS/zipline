@@ -418,7 +418,7 @@ def handle_data(context, data):
         self.run_algorithm(initialize=initialize, handle_data=handle_data)
 
     def test_schedule_function_custom_cal(self):
-        # run a simulation on the CME cal, and schedule a function
+        # run a simulation on the CMES cal, and schedule a function
         # using the NYSE cal
         algotext = """
 from zipline.api import (
@@ -453,7 +453,7 @@ def log_nyse_close(context, data):
         algo = self.make_algo(
             script=algotext,
             sim_params=self.make_simparams(
-                trading_calendar=get_calendar("CME"),
+                trading_calendar=get_calendar("CMES"),
             )
         )
         algo.run()
@@ -479,7 +479,7 @@ def log_nyse_close(context, data):
             from trading_calendars import get_calendar
 
             def initialize(context):
-                schedule_function(func=my_func, calendar=get_calendar('NYSE'))
+                schedule_function(func=my_func, calendar=get_calendar('XNYS'))
 
             def my_func(context, data):
                 pass
@@ -489,7 +489,7 @@ def log_nyse_close(context, data):
         algo = self.make_algo(
             script=erroring_algotext,
             sim_params=self.make_simparams(
-                trading_calendar=get_calendar("CME"),
+                trading_calendar=get_calendar("CMES"),
             ),
         )
 
@@ -822,7 +822,7 @@ class TestPositions(zf.WithMakeAlgo, zf.ZiplineTestCase):
     SIM_PARAMS_DATA_FREQUENCY = 'daily'
 
     @classmethod
-    def make_equity_daily_bar_data(cls):
+    def make_equity_daily_bar_data(cls, country_code, sids):
         frame = pd.DataFrame(
             {
                 'open': [90, 95, 100, 105],
@@ -833,7 +833,7 @@ class TestPositions(zf.WithMakeAlgo, zf.ZiplineTestCase):
             },
             index=cls.equity_daily_bar_days,
         )
-        return ((sid, frame) for sid in cls.asset_finder.equities_sids)
+        return ((sid, frame) for sid in sids)
 
     @classmethod
     def make_futures_info(cls):
@@ -845,7 +845,7 @@ class TestPositions(zf.WithMakeAlgo, zf.ZiplineTestCase):
                     'start_date': cls.START_DATE,
                     'end_date': cls.END_DATE,
                     'auto_close_date': cls.END_DATE + cls.trading_calendar.day,
-                    'exchange': 'CME',
+                    'exchange': 'CMES',
                     'multiplier': 100,
                 },
             },
@@ -1105,8 +1105,8 @@ class TestBeforeTradingStart(zf.WithMakeAlgo, zf.ZiplineTestCase):
         ])
 
     @classmethod
-    def make_equity_daily_bar_data(cls):
-        for sid in cls.ASSET_FINDER_EQUITY_SIDS:
+    def make_equity_daily_bar_data(cls, country_code, sids):
+        for sid in sids:
             yield sid, create_daily_df_for_asset(
                 cls.trading_calendar,
                 cls.data_start,
@@ -1439,14 +1439,14 @@ class TestAlgoScript(zf.WithMakeAlgo, zf.ZiplineTestCase):
         return data
 
     @classmethod
-    def make_equity_daily_bar_data(cls):
+    def make_equity_daily_bar_data(cls, country_code, sids):
         cal = cls.trading_calendars[Equity]
         sessions = cal.sessions_in_range(cls.START_DATE, cls.END_DATE)
         frame = pd.DataFrame({
             'close': 10., 'high': 10.5, 'low': 9.5, 'open': 10., 'volume': 100,
         }, index=sessions)
 
-        for sid in cls.sids:
+        for sid in sids:
             yield sid, frame
 
     def test_noop(self):
@@ -2009,7 +2009,7 @@ class TestCapitalChanges(zf.WithMakeAlgo, zf.ZiplineTestCase):
         yield cls.MINUTELY_SID, frame
 
     @classmethod
-    def make_equity_daily_bar_data(cls):
+    def make_equity_daily_bar_data(cls, country_code, sids):
         days = cls.trading_calendar.sessions_in_range(
             cls.START_DATE,
             cls.END_DATE,
@@ -3170,7 +3170,7 @@ class TestAccountControls(zf.WithMakeAlgo,
     DATA_PORTAL_USE_MINUTE_DATA = False
 
     @classmethod
-    def make_equity_daily_bar_data(cls):
+    def make_equity_daily_bar_data(cls, country_code, sids):
         frame = pd.DataFrame(data={
             'close': [10., 10., 11., 11.],
             'open': [10., 10., 11., 11.],
@@ -3551,7 +3551,7 @@ class TestOrderCancelation(zf.WithMakeAlgo, zf.ZiplineTestCase):
         )
 
     @classmethod
-    def make_equity_daily_bar_data(cls):
+    def make_equity_daily_bar_data(cls, country_code, sids):
         yield 1, pd.DataFrame(
             {
                 'open': np.full(3, 1, dtype=np.float64),
@@ -3733,7 +3733,7 @@ class TestDailyEquityAutoClose(zf.WithMakeAlgo, zf.ZiplineTestCase):
         return cls.asset_info
 
     @classmethod
-    def make_equity_daily_bar_data(cls):
+    def make_equity_daily_bar_data(cls, country_code, sids):
         cls.daily_data = make_trade_data_for_asset_info(
             dates=cls.test_days,
             asset_info=cls.asset_info,

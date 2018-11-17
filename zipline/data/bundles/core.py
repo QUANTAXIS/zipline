@@ -10,12 +10,8 @@ import pandas as pd
 from trading_calendars import get_calendar
 from toolz import curry, complement, take
 
-from ..us_equity_pricing import (
-    BcolzDailyBarReader,
-    BcolzDailyBarWriter,
-    SQLiteAdjustmentReader,
-    SQLiteAdjustmentWriter,
-)
+from ..adjustments import SQLiteAdjustmentReader, SQLiteAdjustmentWriter
+from ..bcolz_daily_bars import BcolzDailyBarReader, BcolzDailyBarWriter
 from ..minute_bars import (
     BcolzMinuteBarReader,
     BcolzMinuteBarWriter,
@@ -424,7 +420,6 @@ def _make_bundle_core():
                         wd.getpath(*adjustment_db_relative(
                             name, timestr, environ=environ)),
                         BcolzDailyBarReader(daily_bars_path),
-                        calendar.all_sessions,
                         overwrite=True,
                     )
                 )

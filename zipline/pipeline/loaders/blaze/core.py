@@ -176,19 +176,11 @@ from zipline.pipeline.common import (
     TS_FIELD_NAME
 )
 from zipline.pipeline.data.dataset import DataSet, Column
-from zipline.pipeline.loaders.utils import (
-    check_data_query_args,
-    normalize_data_query_bounds,
-)
+from zipline.pipeline.domain import GENERIC
 from zipline.pipeline.sentinels import NotSpecified
 from zipline.lib.adjusted_array import can_represent_dtype
-from zipline.utils.input_validation import (
-    expect_element,
-    ensure_timezone,
-    optionally,
-)
+from zipline.utils.input_validation import expect_element
 from zipline.utils.pool import SequentialPool
-from zipline.utils.preprocess import preprocess
 from ._core import (  # noqa
     adjusted_arrays_from_rows_with_assets,
     adjusted_arrays_from_rows_without_assets,
@@ -281,7 +273,7 @@ def datashape_type_to_numpy(type_):
 
 
 @memoize
-def new_dataset(expr, missing_values):
+def new_dataset(expr, missing_values, domain):
     """
     Creates or returns a dataset from a blaze expression.
 
@@ -294,6 +286,8 @@ def new_dataset(expr, missing_values):
 
         This needs to be a frozenset rather than a dict or tuple of tuples
         because we want a collection that's unordered but still hashable.
+    domain : zipline.pipeline.domain.Domain
+        Domain of the dataset to be created.
 
     Returns
     -------
@@ -322,6 +316,11 @@ def new_dataset(expr, missing_values):
         else:
             col = NonPipelineField(name, type_)
         class_dict[name] = col
+
+    if 'domain' in class_dict:
+        raise ValueError("Got a column named 'domain' in new_dataset(). "
+                         "'domain' is reserved.")
+    class_dict['domain'] = domain
 
     name = expr._name
     if name is None:
@@ -517,6 +516,7 @@ def from_blaze(expr,
                resources=None,
                odo_kwargs=None,
                missing_values=None,
+               domain=GENERIC,
                no_deltas_rule='warn',
                no_checkpoints_rule='warn'):
     """Create a Pipeline API object from a blaze expression.
@@ -545,6 +545,8 @@ def from_blaze(expr,
         scope for ``bz.compute``.
     odo_kwargs : dict, optional
         The keyword arguments to pass to odo when evaluating the expressions.
+    domain : zipline.pipeline.domain.Domain
+        Domain of the dataset to be created.
     missing_values : dict[str -> any], optional
         A dict mapping column names to missing values for those columns.
         Missing values are required for integral columns.
@@ -673,7 +675,7 @@ def from_blaze(expr,
     # Create or retrieve the Pipeline API dataset.
     if missing_values is None:
         missing_values = {}
-    ds = new_dataset(dataset_expr, frozenset(missing_values.items()))
+    ds = new_dataset(dataset_expr, frozenset(missing_values.items()), domain)
 
     # Register our new dataset with the loader.
     (loader if loader is not None else global_loader).register_dataset(
@@ -756,10 +758,6 @@ class BlazeLoader(object):
         An initial mapping of datasets to ``ExprData`` objects.
         NOTE: Further mutations to this map will not be reflected by this
         object.
-    data_query_time : time, optional
-        The time to use for the data query cutoff.
-    data_query_tz : tzinfo or str, optional
-        The timezeone to use for the data query cutoff.
     pool : Pool, optional
         The pool to use to run blaze queries concurrently. This object must
         support ``imap_unordered``, ``apply`` and ``apply_async`` methods.
@@ -778,16 +776,7 @@ class BlazeLoader(object):
     :class:`zipline.utils.pool.SequentialPool`
     :class:`multiprocessing.Pool`
     """
-    @preprocess(data_query_tz=optionally(ensure_timezone))
-    def __init__(self,
-                 dsmap=None,
-                 data_query_time=None,
-                 data_query_tz=None,
-                 pool=SequentialPool()):
-        check_data_query_args(data_query_time, data_query_tz)
-        self._data_query_time = data_query_time
-        self._data_query_tz = data_query_tz
-
+    def __init__(self, dsmap=None, pool=SequentialPool()):
         # explicitly public
         self.pool = pool
 
@@ -886,15 +875,29 @@ class BlazeLoader(object):
             odo_kwargs,
         )
 
-    def load_adjusted_array(self, columns, dates, assets, mask):
+    def load_adjusted_array(self, domain, columns, dates, sids, mask):
+        data_query_cutoff_times = domain.data_query_cutoff_for_sessions(
+            dates,
+        )
         return merge(
             self.pool.imap_unordered(
-                partial(self._load_dataset, dates, assets, mask),
+                partial(
+                    self._load_dataset,
+                    dates,
+                    data_query_cutoff_times,
+                    sids,
+                    mask,
+                ),
                 itervalues(groupby(getitem(self._table_expressions), columns)),
             ),
         )
 
-    def _load_dataset(self, dates, assets, mask, columns):
+    def _load_dataset(self,
+                      dates,
+                      data_query_cutoff_times,
+                      assets,
+                      mask,
+                      columns):
         try:
             (expr_data,) = {self._table_expressions[c] for c in columns}
         except ValueError:
@@ -911,14 +914,7 @@ class BlazeLoader(object):
         requested_columns = set(map(getname, columns))
         colnames = sorted(added_query_fields | requested_columns)
 
-        data_query_time = self._data_query_time
-        data_query_tz = self._data_query_tz
-        lower_dt, upper_dt = normalize_data_query_bounds(
-            dates[0],
-            dates[-1],
-            data_query_time,
-            data_query_tz,
-        )
+        lower_dt, upper_dt = data_query_cutoff_times[[0, -1]]
 
         def collect_expr(e, lower):
             """Materialize the expression as a dataframe.
@@ -980,8 +976,7 @@ class BlazeLoader(object):
         if have_sids:
             return adjusted_arrays_from_rows_with_assets(
                 dates,
-                data_query_time,
-                data_query_tz,
+                data_query_cutoff_times,
                 assets,
                 columns,
                 all_rows,
@@ -989,8 +984,7 @@ class BlazeLoader(object):
         else:
             return adjusted_arrays_from_rows_without_assets(
                 dates,
-                data_query_time,
-                data_query_tz,
+                data_query_cutoff_times,
                 columns,
                 all_rows,
             )
@@ -1047,7 +1041,7 @@ def get_materialized_checkpoints(checkpoints, colnames, lower_dt, odo_kwargs):
     if checkpoints is not None:
         ts = checkpoints[TS_FIELD_NAME]
         checkpoints_ts = odo(
-            ts[ts <= lower_dt].max(),
+            ts[ts < lower_dt].max(),
             pd.Timestamp,
             **odo_kwargs
         )

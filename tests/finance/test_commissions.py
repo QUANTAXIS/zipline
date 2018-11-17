@@ -35,7 +35,7 @@ class CommissionUnitTests(WithAssetFinder, ZiplineTestCase):
             'notice_date': [cls.END_DATE, cls.END_DATE],
             'expiration_date': [cls.END_DATE, cls.END_DATE],
             'multiplier': [500, 500],
-            'exchange': ['CME', 'CME'],
+            'exchange': ['CMES', 'CMES'],
         })
 
     def generate_order_and_txns(self, sid, order_amount, fill_amounts):
@@ -337,15 +337,15 @@ class CommissionAlgorithmTests(WithMakeAlgo, ZiplineTestCase):
             'notice_date': [cls.END_DATE, cls.END_DATE],
             'expiration_date': [cls.END_DATE, cls.END_DATE],
             'multiplier': [500, 500],
-            'exchange': ['CME', 'CME'],
+            'exchange': ['CMES', 'CMES'],
         })
 
     @classmethod
-    def make_equity_daily_bar_data(cls):
+    def make_equity_daily_bar_data(cls, country_code, sids):
         sessions = cls.trading_calendar.sessions_in_range(
             cls.START_DATE, cls.END_DATE,
         )
-        for sid in cls.ASSET_FINDER_EQUITY_SIDS:
+        for sid in sids:
             yield sid, DataFrame(
                 index=sessions,
                 data={

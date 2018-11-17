@@ -1,6 +1,7 @@
 """
 Synthetic data loaders for testing.
 """
+from interface import implements
 from numpy import (
     arange,
     array,
@@ -8,6 +9,7 @@ from numpy import (
     float64,
     full,
     iinfo,
+    nan,
     uint32,
 )
 from numpy.random import RandomState
@@ -17,11 +19,12 @@ from sqlite3 import connect as sqlite3_connect
 
 from .base import PipelineLoader
 from .frame import DataFrameLoader
-from zipline.data.us_equity_pricing import (
+from zipline.data.adjustments import (
     SQLiteAdjustmentReader,
     SQLiteAdjustmentWriter,
-    US_EQUITY_PRICING_BCOLZ_COLUMNS,
 )
+from zipline.data.bcolz_daily_bars import US_EQUITY_PRICING_BCOLZ_COLUMNS
+
 from zipline.utils.numpy_utils import (
     bool_dtype,
     datetime64ns_dtype,
@@ -38,7 +41,7 @@ def nanos_to_seconds(nanos):
     return nanos / (1000 * 1000 * 1000)
 
 
-class PrecomputedLoader(PipelineLoader):
+class PrecomputedLoader(implements(PipelineLoader)):
     """
     Synthetic PipelineLoader that uses a pre-computed array for each column.
 
@@ -76,18 +79,20 @@ class PrecomputedLoader(PipelineLoader):
 
         self._loaders = loaders
 
-    def load_adjusted_array(self, columns, dates, assets, mask):
+    def load_adjusted_array(self, domain, columns, dates, sids, mask):
         """
         Load by delegating to sub-loaders.
         """
         out = {}
         for col in columns:
             try:
-                loader = self._loaders[col]
+                loader = self._loaders.get(col)
+                if loader is None:
+                    loader = self._loaders[col.unspecialize()]
             except KeyError:
                 raise ValueError("Couldn't find loader for %s" % col)
             out.update(
-                loader.load_adjusted_array([col], dates, assets, mask)
+                loader.load_adjusted_array(domain, [col], dates, sids, mask)
             )
         return out
 
@@ -219,7 +224,7 @@ def asset_end(asset_info, asset):
     return ret
 
 
-def make_bar_data(asset_info, calendar):
+def make_bar_data(asset_info, calendar, holes=None):
     """
 
     For a given asset/date/column combination, we generate a corresponding raw
@@ -246,6 +251,9 @@ def make_bar_data(asset_info, calendar):
         DataFrame with asset_id as index and 'start_date'/'end_date' columns.
     calendar : pd.DatetimeIndex
         The trading calendar to use.
+    holes : dict[int -> tuple[pd.Timestamps]], optional
+        A dict mapping asset ids to the tuple of dates that should have
+        no data for that asset in the output. Default is no holes.
 
     Yields
     ------
@@ -295,6 +303,11 @@ def make_bar_data(asset_info, calendar):
             columns=US_EQUITY_PRICING_BCOLZ_COLUMNS,
         )
 
+        if holes is not None and asset_id in holes:
+            for dt in holes[asset_id]:
+                frame.loc[dt, OHLC] = nan
+                frame.loc[dt, ['volume']] = 0
+
         frame['day'] = nanos_to_seconds(datetimes.asi8)
         frame['id'] = asset_id
         return frame
@@ -316,13 +329,32 @@ def expected_bar_value(asset_id, date, colname):
     return from_asset + from_colname + from_date
 
 
-def expected_bar_values_2d(dates, asset_info, colname):
+def expected_bar_value_with_holes(asset_id,
+                                  date,
+                                  colname,
+                                  holes,
+                                  missing_value):
+    # Explicit holes are filled with the missing value.
+    if asset_id in holes and date in holes[asset_id]:
+        return missing_value
+
+    return expected_bar_value(asset_id, date, colname)
+
+
+def expected_bar_values_2d(dates,
+                           assets,
+                           asset_info,
+                           colname,
+                           holes=None):
     """
     Return an 2D array containing cls.expected_value(asset_id, date,
     colname) for each date/asset pair in the inputs.
 
-    Values before/after an assets lifetime are filled with 0 for volume and
-    NaN for price columns.
+    Missing locs are filled with 0 for volume and NaN for price columns:
+
+        - Values before/after an asset's lifetime.
+        - Values for asset_ids not contained in asset_info.
+        - Locs defined in `holes`.
     """
     if colname == 'volume':
         dtype = uint32
@@ -331,10 +363,12 @@ def expected_bar_values_2d(dates, asset_info, colname):
         dtype = float64
         missing = float('nan')
 
-    assets = asset_info.index
-
     data = full((len(dates), len(assets)), missing, dtype=dtype)
     for j, asset in enumerate(assets):
+        # Use missing values when asset_id is not contained in asset_info.
+        if asset not in asset_info.index:
+            continue
+
         start = asset_start(asset_info, asset)
         end = asset_end(asset_info, asset)
         for i, date in enumerate(dates):
@@ -342,7 +376,19 @@ def expected_bar_values_2d(dates, asset_info, colname):
             # date.
             if not (start <= date <= end):
                 continue
-            data[i, j] = expected_bar_value(asset, date, colname)
+
+            if holes is not None:
+                expected = expected_bar_value_with_holes(
+                    asset,
+                    date,
+                    colname,
+                    holes,
+                    missing,
+                )
+            else:
+                expected = expected_bar_value(asset, date, colname)
+
+            data[i, j] = expected
     return data
 
 

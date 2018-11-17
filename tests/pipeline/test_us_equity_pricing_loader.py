@@ -37,6 +37,7 @@ from pandas.util.testing import assert_frame_equal
 from toolz.curried.operator import getitem
 
 from zipline.lib.adjustment import Float64Multiply
+from zipline.pipeline.domain import US_EQUITIES
 from zipline.pipeline.loaders.synthetic import (
     NullAdjustmentReader,
     make_bar_data,
@@ -96,7 +97,7 @@ EQUITY_INFO = DataFrame(
 EQUITY_INFO['symbol'] = [chr(ord('A') + n) for n in range(len(EQUITY_INFO))]
 EQUITY_INFO['exchange'] = 'TEST'
 
-TEST_QUERY_ASSETS = EQUITY_INFO.index
+TEST_QUERY_SIDS = EQUITY_INFO.index
 
 
 # ADJUSTMENTS use the following scheme to indicate information about the value
@@ -282,10 +283,12 @@ class USEquityPricingLoaderTestCase(WithAdjustmentReader,
 
     @classmethod
     def make_adjustment_writer_equity_daily_bar_reader(cls):
-        return MockDailyBarReader()
+        return MockDailyBarReader(
+            dates=cls.calendar_days_between(cls.START_DATE, cls.END_DATE),
+        )
 
     @classmethod
-    def make_equity_daily_bar_data(cls):
+    def make_equity_daily_bar_data(cls, country_code, sids):
         return make_bar_data(
             EQUITY_INFO,
             cls.equity_daily_bar_days,
@@ -294,7 +297,7 @@ class USEquityPricingLoaderTestCase(WithAdjustmentReader,
     @classmethod
     def init_class_fixtures(cls):
         super(USEquityPricingLoaderTestCase, cls).init_class_fixtures()
-        cls.assets = TEST_QUERY_ASSETS
+        cls.sids = TEST_QUERY_SIDS
         cls.asset_info = EQUITY_INFO
 
     def test_input_sanity(self):
@@ -309,14 +312,15 @@ class USEquityPricingLoaderTestCase(WithAdjustmentReader,
                 self.assertGreaterEqual(eff_date, asset_start)
                 self.assertLessEqual(eff_date, asset_end)
 
-    def calendar_days_between(self, start_date, end_date, shift=0):
-        slice_ = self.equity_daily_bar_days.slice_indexer(start_date, end_date)
+    @classmethod
+    def calendar_days_between(cls, start_date, end_date, shift=0):
+        slice_ = cls.equity_daily_bar_days.slice_indexer(start_date, end_date)
         start = slice_.start + shift
         stop = slice_.stop + shift
         if start < 0:
             raise KeyError(start_date, shift)
 
-        return self.equity_daily_bar_days[start:stop]
+        return cls.equity_daily_bar_days[start:stop]
 
     def expected_adjustments(self, start_date, end_date):
         price_adjustments = {}
@@ -370,7 +374,7 @@ class USEquityPricingLoaderTestCase(WithAdjustmentReader,
         adjustments = self.adjustment_reader.load_adjustments(
             [c.name for c in columns],
             query_days,
-            self.assets,
+            self.sids,
         )
 
         close_adjustments = adjustments[0]
@@ -467,7 +471,7 @@ class USEquityPricingLoaderTestCase(WithAdjustmentReader,
         adjustments = adjustment_reader.load_adjustments(
             [c.name for c in columns],
             query_days,
-            self.assets,
+            self.sids,
         )
         self.assertEqual(adjustments, [{}, {}])
 
@@ -477,20 +481,23 @@ class USEquityPricingLoaderTestCase(WithAdjustmentReader,
         )
 
         results = pricing_loader.load_adjusted_array(
-            columns,
+            domain=US_EQUITIES,
+            columns=columns,
             dates=query_days,
-            assets=self.assets,
-            mask=ones((len(query_days), len(self.assets)), dtype=bool),
+            sids=self.sids,
+            mask=ones((len(query_days), len(self.sids)), dtype=bool),
         )
         closes, volumes = map(getitem(results), columns)
 
         expected_baseline_closes = expected_bar_values_2d(
             shifted_query_days,
+            self.sids,
             self.asset_info,
             'close',
         )
         expected_baseline_volumes = expected_bar_values_2d(
             shifted_query_days,
+            self.sids,
             self.asset_info,
             'volume',
         )
@@ -554,20 +561,23 @@ class USEquityPricingLoaderTestCase(WithAdjustmentReader,
         )
 
         results = pricing_loader.load_adjusted_array(
-            columns,
+            domain=US_EQUITIES,
+            columns=columns,
             dates=query_days,
-            assets=Int64Index(arange(1, 7)),
+            sids=Int64Index(arange(1, 7)),
             mask=ones((len(query_days), 6), dtype=bool),
         )
         highs, volumes = map(getitem(results), columns)
 
         expected_baseline_highs = expected_bar_values_2d(
             shifted_query_days,
+            self.sids,
             self.asset_info,
             'high',
         )
         expected_baseline_volumes = expected_bar_values_2d(
             shifted_query_days,
+            self.sids,
             self.asset_info,
             'volume',
         )
@@ -580,7 +590,7 @@ class USEquityPricingLoaderTestCase(WithAdjustmentReader,
                 baseline_dates = query_days[offset:offset + windowlen]
                 expected_adjusted_highs = self.apply_adjustments(
                     baseline_dates,
-                    self.assets,
+                    self.sids,
                     baseline,
                     # Apply all adjustments.
                     concat([SPLITS, MERGERS, DIVIDENDS_EXPECTED],
@@ -597,7 +607,7 @@ class USEquityPricingLoaderTestCase(WithAdjustmentReader,
 
                 expected_adjusted_volumes = self.apply_adjustments(
                     baseline_dates,
-                    self.assets,
+                    self.sids,
                     baseline,
                     adjustments,
                 )

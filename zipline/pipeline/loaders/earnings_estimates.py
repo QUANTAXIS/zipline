@@ -1,5 +1,6 @@
 from abc import abstractmethod, abstractproperty
 
+from interface import implements
 import numpy as np
 import pandas as pd
 from six import viewvalues
@@ -25,7 +26,7 @@ from zipline.pipeline.loaders.base import PipelineLoader
 from zipline.utils.numpy_utils import datetime64ns_dtype, float64_dtype
 from zipline.pipeline.loaders.utils import (
     ffill_across_cols,
-    last_in_date_group
+    last_in_date_group,
 )
 
 
@@ -101,7 +102,7 @@ def add_new_adjustments(adjustments_dict,
         adjustments_dict[column_name][ts] = adjustments
 
 
-class EarningsEstimatesLoader(PipelineLoader):
+class EarningsEstimatesLoader(implements(PipelineLoader)):
     """
     An abstract pipeline loader for estimates data that can load data a
     variable number of quarters forwards/backwards from calendar dates
@@ -122,7 +123,7 @@ class EarningsEstimatesLoader(PipelineLoader):
                 occurred..
 
             timestamp : datetime64[ns]
-                The date on which we learned about the estimate.
+                The datetime where we learned about the estimate.
 
             fiscal_quarter : int64
                 The quarter during which the event has/will occur.
@@ -134,9 +135,7 @@ class EarningsEstimatesLoader(PipelineLoader):
         A map of names of BoundColumns that this loader will load to the
         names of the corresponding columns in `events`.
     """
-    def __init__(self,
-                 estimates,
-                 name_map):
+    def __init__(self, estimates, name_map):
         validate_column_specs(
             estimates,
             name_map
@@ -575,7 +574,7 @@ class EarningsEstimatesLoader(PipelineLoader):
             column.missing_value
         )
 
-    def load_adjusted_array(self, columns, dates, assets, mask):
+    def load_adjusted_array(self, domain, columns, dates, sids, mask):
         # Separate out getting the columns' datasets and the datasets'
         # num_announcements attributes to ensure that we're catching the right
         # AttributeError.
@@ -600,11 +599,13 @@ class EarningsEstimatesLoader(PipelineLoader):
         out = {}
         # To optimize performance, only work below on assets that are
         # actually in the raw data.
-        assets_with_data = set(assets) & set(self.estimates[SID_FIELD_NAME])
+        data_query_cutoff_times = domain.data_query_cutoff_for_sessions(dates)
+        assets_with_data = set(sids) & set(self.estimates[SID_FIELD_NAME])
         last_per_qtr, stacked_last_per_qtr = self.get_last_data_per_qtr(
             assets_with_data,
             columns,
-            dates
+            dates,
+            data_query_cutoff_times,
         )
         # Determine which quarter is immediately next/previous for each
         # date.
@@ -627,7 +628,7 @@ class EarningsEstimatesLoader(PipelineLoader):
                 requested_qtr_data,
                 last_per_qtr,
                 dates,
-                assets,
+                sids,
                 columns
             )
 
@@ -637,14 +638,14 @@ class EarningsEstimatesLoader(PipelineLoader):
             # sids for each field. This allows us to do the lookup once on
             # level 1 instead of doing the lookup each time per value in
             # level 0.
-            asset_indexer = assets.get_indexer_for(
+            asset_indexer = sids.get_indexer_for(
                 requested_qtr_data.columns.levels[1],
             )
             for col in columns:
                 column_name = self.name_map[col.name]
                 # allocate the empty output with the correct missing value
                 output_array = np.full(
-                    (len(dates), len(assets)),
+                    (len(dates), len(sids)),
                     col.missing_value,
                     dtype=col.dtype,
                 )
@@ -663,7 +664,11 @@ class EarningsEstimatesLoader(PipelineLoader):
                 )
         return out
 
-    def get_last_data_per_qtr(self, assets_with_data, columns, dates):
+    def get_last_data_per_qtr(self,
+                              assets_with_data,
+                              columns,
+                              dates,
+                              data_query_cutoff_times):
         """
         Determine the last piece of information we know for each column on each
         date in the index for each sid and quarter.
@@ -675,7 +680,7 @@ class EarningsEstimatesLoader(PipelineLoader):
             loader.
         columns : iterable of BoundColumn
             The columns that need to be loaded from the raw data.
-        dates : pd.DatetimeIndex
+        data_query_cutoff_times : pd.DatetimeIndex
             The calendar of dates for which data should be loaded.
 
         Returns
@@ -688,16 +693,17 @@ class EarningsEstimatesLoader(PipelineLoader):
             A DataFrame with columns that are a MultiIndex of [
             self.estimates.columns, normalized_quarters, sid].
         """
-        # Get a DataFrame indexed by date with a MultiIndex of columns of [
-        # self.estimates.columns, normalized_quarters, sid], where each cell
+        # Get a DataFrame indexed by date with a MultiIndex of columns of
+        # [self.estimates.columns, normalized_quarters, sid], where each cell
         # contains the latest data for that day.
         last_per_qtr = last_in_date_group(
             self.estimates,
-            dates,
+            data_query_cutoff_times,
             assets_with_data,
             reindex=True,
             extra_groupers=[NORMALIZED_QUARTERS],
         )
+        last_per_qtr.index = dates
         # Forward fill values for each quarter/sid/dataset column.
         ffill_across_cols(last_per_qtr, columns, self.name_map)
         # Stack quarter and sid into the index.

@@ -39,7 +39,7 @@ from zipline.data._minute_bar_internal import (
 
 from zipline.gens.sim_engine import NANOS_IN_MINUTE
 from zipline.data.bar_reader import BarReader, NoDataForSid, NoDataOnDate
-from zipline.data.us_equity_pricing import check_uint32_safe
+from zipline.data.bcolz_daily_bars import check_uint32_safe
 from zipline.utils.cli import maybe_show_progress
 from zipline.utils.compat import mappingproxy
 from zipline.utils.memoize import lazyval
@@ -131,10 +131,10 @@ def convert_cols(cols, scale_factor, sid, invalid_data_behavior):
         If 'warn', logs a warning and filters out incompatible values.
         If 'ignore', silently filters out incompatible values.
     """
-    scaled_opens = np.nan_to_num(cols['open']) * scale_factor
-    scaled_highs = np.nan_to_num(cols['high']) * scale_factor
-    scaled_lows = np.nan_to_num(cols['low']) * scale_factor
-    scaled_closes = np.nan_to_num(cols['close']) * scale_factor
+    scaled_opens = (np.nan_to_num(cols['open']) * scale_factor).round()
+    scaled_highs = (np.nan_to_num(cols['high']) * scale_factor).round()
+    scaled_lows = (np.nan_to_num(cols['low']) * scale_factor).round()
+    scaled_closes = (np.nan_to_num(cols['close']) * scale_factor).round()
 
     exclude_mask = np.zeros_like(scaled_opens, dtype=bool)
 
@@ -233,7 +233,7 @@ class BcolzMinuteBarMetadata(object):
             else:
                 # No calendar info included in older versions, so
                 # default to NYSE.
-                calendar = get_calendar('NYSE')
+                calendar = get_calendar('XNYS')
 
                 start_session = pd.Timestamp(
                     raw_data['first_trading_day'], tz='UTC')
